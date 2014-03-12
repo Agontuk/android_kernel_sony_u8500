@@ -2510,7 +2510,7 @@ static int cg2900_map_event_to_v4l2(
 }
 
 /**
- * cg2900_open()- This function nitializes and switches on FM.
+ * cg2900_open()- This function initializes and switches on FM.
  *
  * This is called when the application opens the character device.
  *
