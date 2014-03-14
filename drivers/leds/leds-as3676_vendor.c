@@ -2286,19 +2286,55 @@ static ssize_t as3676_audio_color_store(struct device *dev,
 	return strnlen(buf, PAGE_SIZE);
 }
 
-static ssize_t as3676_als_lx_show(struct device *dev,
+static ssize_t as3676_cm_lux_res_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-		//Dirty workaround
-		return as3676_als_result_show(dev, attr, buf);
+	struct as3676_data *data = dev_get_drvdata(dev);
+	static int als_raw_res;
+	s32 amb_result = i2c_smbus_read_byte_data(data->client,
+			AS3676_REG_ALS_result);
+
+	if (!(AS3676_READ_REG(AS3676_REG_ALS_control) & 1)) {
+		als_raw_res = 0;
+		snprintf(buf, PAGE_SIZE,
+				"%d\n", als_raw_res);
+		return strnlen(buf, PAGE_SIZE);
+	} else {
+		als_raw_res = (int)amb_result;
+		if (als_raw_res) {
+			if (als_raw_res > 0 && als_raw_res < 25) {
+				als_raw_res = 33;
+			} else if (als_raw_res > 25 && als_raw_res < 50) {
+				als_raw_res = 77;
+			} else if (als_raw_res > 50 && als_raw_res < 75) {
+				als_raw_res = 220;
+			} else if (als_raw_res > 75 && als_raw_res < 100) {
+				als_raw_res = 308;
+			} else if (als_raw_res > 100 && als_raw_res < 125) {
+				als_raw_res = 397;
+			} else if (als_raw_res > 125 && als_raw_res < 150) {
+				als_raw_res = 485;
+			} else if (als_raw_res > 150 && als_raw_res < 180) {
+				als_raw_res = 698;
+			} else if (als_raw_res > 180 && als_raw_res < 210) {
+				als_raw_res = 860;
+			} else if (als_raw_res > 210 && als_raw_res < 255) {
+				als_raw_res = 1023;
+			}
+		} else
+			als_raw_res = 0;
+
+		snprintf(buf, PAGE_SIZE,
+				"%d\n", als_raw_res);
+		return strnlen(buf, PAGE_SIZE);
+	}
 }
 
-static ssize_t as3676_als_lx_store(struct device *dev,
+static ssize_t as3676_cm_lux_res_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t size)
 {
-		//Dirty workaround
-		return as3676_als_result_store(dev, attr, buf, size);
+	return -EINVAL;
 }
 
 static struct device_attribute as3676_attributes[] = {
@@ -2321,7 +2357,7 @@ static struct device_attribute as3676_attributes[] = {
 	AS3676_ATTR(als_on),
 	AS3676_ATTR(audio_on),
 	AS3676_ATTR(audio_color),
-	AS3676_ATTR(als_lx),
+	AS3677_ATTR(cm_lux_res),
 	__ATTR_NULL
 };
 
