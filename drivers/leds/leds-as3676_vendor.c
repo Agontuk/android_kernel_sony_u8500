@@ -2357,7 +2357,7 @@ static struct device_attribute as3676_attributes[] = {
 	AS3676_ATTR(als_on),
 	AS3676_ATTR(audio_on),
 	AS3676_ATTR(audio_color),
-	AS3677_ATTR(cm_lux_res),
+	AS3676_ATTR(cm_lux_res),
 	__ATTR_NULL
 };
 
