@@ -2301,28 +2301,6 @@ static ssize_t as3676_cm_lux_res_show(struct device *dev,
 		return strnlen(buf, PAGE_SIZE);
 	} else {
 		als_raw_res = (int)amb_result;
-		if (als_raw_res) {
-			if (als_raw_res > 0 && als_raw_res < 25) {
-				als_raw_res = 33;
-			} else if (als_raw_res > 25 && als_raw_res < 50) {
-				als_raw_res = 77;
-			} else if (als_raw_res > 50 && als_raw_res < 75) {
-				als_raw_res = 220;
-			} else if (als_raw_res > 75 && als_raw_res < 100) {
-				als_raw_res = 308;
-			} else if (als_raw_res > 100 && als_raw_res < 125) {
-				als_raw_res = 397;
-			} else if (als_raw_res > 125 && als_raw_res < 150) {
-				als_raw_res = 485;
-			} else if (als_raw_res > 150 && als_raw_res < 180) {
-				als_raw_res = 698;
-			} else if (als_raw_res > 180 && als_raw_res < 210) {
-				als_raw_res = 860;
-			} else if (als_raw_res > 210 && als_raw_res < 255) {
-				als_raw_res = 1023;
-			}
-		} else
-			als_raw_res = 0;
 
 		snprintf(buf, PAGE_SIZE,
 				"%d\n", als_raw_res);
