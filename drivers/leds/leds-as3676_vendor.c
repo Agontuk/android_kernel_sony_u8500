@@ -40,7 +40,7 @@
 #include <linux/delay.h>
 #include <linux/version.h>
 #include <linux/slab.h>
-#include <linux/leds-as3676.h>
+#include <linux/leds-as3676_vendor.h>
 
 /* Current group check function is too strict in some cases.
    Setting this define to 0 disables them */
