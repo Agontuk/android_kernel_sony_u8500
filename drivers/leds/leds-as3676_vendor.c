@@ -2286,7 +2286,7 @@ static ssize_t as3676_audio_color_store(struct device *dev,
 	return strnlen(buf, PAGE_SIZE);
 }
 
-static ssize_t as3676_cm_lux_res_show(struct device *dev,
+static ssize_t as3676_lx_res_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct as3676_data *data = dev_get_drvdata(dev);
@@ -2308,7 +2308,7 @@ static ssize_t as3676_cm_lux_res_show(struct device *dev,
 	}
 }
 
-static ssize_t as3676_cm_lux_res_store(struct device *dev,
+static ssize_t as3676_lx_res_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t size)
 {
@@ -2335,7 +2335,7 @@ static struct device_attribute as3676_attributes[] = {
 	AS3676_ATTR(als_on),
 	AS3676_ATTR(audio_on),
 	AS3676_ATTR(audio_color),
-	AS3676_ATTR(cm_lux_res),
+	AS3676_ATTR(als_lx),
 	__ATTR_NULL
 };
 
