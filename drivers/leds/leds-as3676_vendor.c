@@ -2,6 +2,10 @@
  * as3676.c - Led dimmer
  *
  * Version:
+ * 2012-04-11: v1.7 : - added also default startup of DCDC with caps on feedback
+ * 2012-02-21: v1.6 : - small bug fix for DCDC handling
+ * 2012-02-03: v1.5 : - avoid current spikes when turning on DCDC
+ *                    - forgot to remove attributes on remove
  * 2012-01-12: v1.4 : - fixes for linux v3.x and minor code review issues
  *                    - fixing incorrect configuration of GPIO1/light pin
  * 2011-12-23: v1.3 : - group check is sometimes too strict, disable it
@@ -36,7 +40,7 @@
 #include <linux/delay.h>
 #include <linux/version.h>
 #include <linux/slab.h>
-#include <linux/leds-as3676_vendor.h>
+#include <linux/leds-as3676.h>
 
 /* Current group check function is too strict in some cases.
    Setting this define to 0 disables them */
@@ -153,6 +157,9 @@
 #define AS3676_LOCK()   mutex_lock(&(data)->update_lock)
 #define AS3676_UNLOCK() mutex_unlock(&(data)->update_lock)
 
+#define LDO_VOLT_DEFALUT_MV 2500
+#define TO_LDO_VOLT_REG(mv) (u8)((mv - 1800) / 50)
+
 struct as3676_reg {
 	const char *name;
 	u8 value;
@@ -170,6 +177,8 @@ struct as3676_led {
 	u8 dls_mode_shift; /* same for cp_mode_shift */
 	u8 aud_reg;
 	u8 aud_shift;
+	u8 mode; /* needed for DCDC checking: usually reflects mode_reg setting,
+		  but is set earlier */
 	struct device_attribute *aud_file;
 	int dim_brightness;
 	int dim_value;
@@ -179,6 +188,13 @@ struct as3676_led {
 	struct as3676_platform_led *pled;
 	bool use_pattern;
 	u8 marker;
+	bool use_dls;
+};
+
+enum ldo_users {
+	LDO_FOR_ALS   = 1 << 0,
+	LDO_FOR_DLS   = 1 << 1,
+	LDO_FOR_AUDIO = 1 << 2,
 };
 
 struct as3676_data {
@@ -192,9 +208,11 @@ struct as3676_data {
 	u32 pattern_data;
 	int num_leds;
 	int ldo_count;
+	u8 caps_mounted_on_dcdc_feedback;
 	u8 als_control_backup;
 	u8 als_result_backup;
 	u8 in_shutdown;
+	int dls_users;
 };
 
 struct as3676_als_group {
@@ -208,7 +226,7 @@ struct as3676_als_group {
 };
 
 #define AS3676_ATTR(_name)  \
-	__ATTR(_name, 0666, as3676_##_name##_show, as3676_##_name##_store)
+	__ATTR(_name, 0644, as3676_##_name##_show, as3676_##_name##_store)
 
 #define AS3676_DEV_ATTR(_name)  \
 	struct device_attribute as3676_##_name = AS3676_ATTR(_name);
@@ -585,6 +603,10 @@ static int as3676_suspend(struct device *dev)
 	data->als_result_backup = i2c_smbus_read_byte_data(data->client,
 			AS3676_REG_ALS_result);
 	as3676_switch_als(data, 0);
+	if (data->dls_users)
+		AS3676_MODIFY_REG(AS3676_REG_GPIO_control, 0x0f, 0x04);
+	if (data->ldo_count)
+		AS3676_MODIFY_REG(AS3676_REG_Control, 1, 0);
 	AS3676_UNLOCK();
 
 	return 0;
@@ -598,6 +620,10 @@ static int as3676_resume(struct device *dev)
 
 	AS3676_LOCK();
 	AS3676_WRITE_REG(AS3676_REG_ALS_result, data->als_result_backup);
+	if (data->ldo_count)
+		AS3676_MODIFY_REG(AS3676_REG_Control, 1, 1);
+	if (data->dls_users)
+		AS3676_MODIFY_REG(AS3676_REG_GPIO_control, 0x0f, 0x00);
 	if (data->als_control_backup & 1)
 		as3676_switch_als(data, 1);
 	AS3676_UNLOCK();
@@ -620,6 +646,7 @@ static const struct dev_pm_ops as3676_pm = {
 	.resume   = as3676_dev_resume,
 };
 #endif
+
 
 static void as3676_shutdown(struct i2c_client *client)
 {
@@ -708,12 +735,18 @@ static s32 as3676_modify_reg(struct as3676_data *data, u8 reg, u8 reset, u8 set)
 	return ret;
 }
 
+static void as3676_check_DCDC_prefix(struct as3676_data *data);
+static void as3676_check_DCDC_infix(struct as3676_data *data);
+static void as3676_check_DCDC_postfix(struct as3676_data *data);
+
 static void as3676_switch_led(struct as3676_data *data,
 		struct as3676_led *led,
 		int mode)
 {
 	int pattern_running = data->pattern_running;
 
+	led->mode = mode;
+	as3676_check_DCDC_prefix(data);
 	if (led->has_extended_mode) {
 		u8 ext_pattern = (AS3676_READ_REG(AS3676_REG_Pattern_control)
 				>> (led->dls_mode_shift+4)) & 1;
@@ -780,26 +813,89 @@ static void as3676_switch_led(struct as3676_data *data,
 				AS3676_READ_REG(AS3676_REG_Pattern_control));
 	}
 	data->pattern_running = pattern_running;
+	as3676_check_DCDC_infix(data);
 }
 
-static void as3676_check_DCDC(struct as3676_data *data)
+static void as3676_check_DCDC_prefix(struct as3676_data *data)
 { /* Here we check if one or more leds are connected to DCDC.
      Doing the same for charge pump is not necessary due to cp_auto_on */
 	int i, on_dcdc = 0;
 	struct as3676_led *led;
+	u8 value;
+
 	for (i = 0; i < 3; i++) {
 		led = data->leds + i;
 		if (led->pled && led->pled->on_charge_pump)
 			continue;
-		if (AS3676_READ_REG(led->reg) != LED_OFF) {
+		if (led->mode) {
 			on_dcdc++;
 			continue;
 		}
-		if (AS3676_READ_REG(led->adder_on_reg) &
-				(1<<led->adder_on_shift))
-			on_dcdc++;
 	}
-	AS3676_MODIFY_REG(AS3676_REG_Control, 0x8, on_dcdc ? 8 : 0);
+	value = AS3676_READ_REG(AS3676_REG_Control);
+
+	if (data->caps_mounted_on_dcdc_feedback && (!(value&0x8) && on_dcdc)) {
+		/* default setup to avoid current spikes */
+		/* see application note AN3676_DCDC_1v0.pdf */
+		/* DCDC Voltage Feedback mode */
+		AS3676_MODIFY_REG(AS3676_REG_DCDC_control1, 0x6, 0x0);
+		/* Turn on DCDC */
+		AS3676_MODIFY_REG(AS3676_REG_Control, 0x8, 8);
+		usleep_range(12000, 20000);
+	}
+
+	if ((value&0x8) && !on_dcdc) {
+		/* Turn off DCDC, this is the same for alternative and default
+		   startup sequence */
+		AS3676_MODIFY_REG(AS3676_REG_Control, 0x8, 0);
+	}
+}
+
+static void as3676_check_DCDC_infix(struct as3676_data *data)
+{ /* Here we check if one or more leds are connected to DCDC.
+     Doing the same for charge pump is not necessary due to cp_auto_on */
+	int i, on_dcdc = 0;
+	struct as3676_led *led;
+	u8 value;
+
+	if (data->caps_mounted_on_dcdc_feedback)
+		return;
+	/* Only alternative startup according to app note */
+
+	for (i = 0; i < 3; i++) {
+		led = data->leds + i;
+		if (led->pled && led->pled->on_charge_pump)
+			continue;
+		if (led->mode) {
+			on_dcdc++;
+			continue;
+		}
+	}
+	value = AS3676_READ_REG(AS3676_REG_Control);
+	if (!(value&0x8) && on_dcdc) {
+		AS3676_MODIFY_REG(AS3676_REG_Control, 0x8, on_dcdc ? 8 : 0);
+		/* alternative setup to avoid current spikes */
+		/* see application note AN3676_DCDC_1v0.pdf */
+	}
+}
+
+static void as3676_check_DCDC_postfix(struct as3676_data *data)
+{ /* Here we check if one or more leds are connected to DCDC.
+     Doing the same for charge pump is not necessary due to cp_auto_on */
+	u8 value, control1;
+
+	if (!data->caps_mounted_on_dcdc_feedback)
+		return;
+
+	value = AS3676_READ_REG(AS3676_REG_Control);
+	control1 = AS3676_READ_REG(AS3676_REG_DCDC_control1);
+
+	/* If DCDC is currently on and we are still in voltage feedback mode
+	   then switch to auto feedback mode */
+	if ((value&0x8) && ((control1&0x6) == 0x00)) {
+		/* Set feedback to curr1, thus enabling auto feedback */
+		AS3676_MODIFY_REG(AS3676_REG_DCDC_control1, 0x6, 0x2);
+	}
 }
 
 static void as3676_set_led_brightness(struct led_classdev *led_cdev,
@@ -827,7 +923,7 @@ static void as3676_set_brightness(struct as3676_data *data,
 		/* we must switch on/off */
 		as3676_switch_led(data, led, value != LED_OFF);
 		AS3676_WRITE_REG(led->reg, value);
-		as3676_check_DCDC(data);
+		as3676_check_DCDC_postfix(data);
 	} else {
 		AS3676_WRITE_REG(led->reg, value);
 	}
@@ -1729,6 +1825,24 @@ static u8 as3676_als_corrected_adder(u8 value, struct as3676_data *data,
 	return value * out / 256;
 }
 
+static void handle_ldo(struct as3676_data *data, enum ldo_users user,
+		bool enable)
+{
+	if (enable) {
+		if (!data->ldo_count) {
+			AS3676_MODIFY_REG(AS3676_REG_Control, 1, 1);
+			dev_info(&data->client->dev, "LDO on\n");
+		}
+		data->ldo_count |= user;
+	} else {
+		data->ldo_count &= ~user;
+		if (!data->ldo_count) {
+			AS3676_MODIFY_REG(AS3676_REG_Control, 1, 0);
+			dev_info(&data->client->dev, "LDO off\n");
+		}
+	}
+}
+
 static ssize_t as3676_dim_start_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t size)
@@ -1851,7 +1965,7 @@ static ssize_t as3676_dim_start_store(struct device *dev,
 					1<<led->adder_on_shift);
 			AS3676_WRITE_REG(led->reg, led->dim_value -
 					AS3676_READ_REG(led->reg));
-			as3676_check_DCDC(data);
+			as3676_check_DCDC_postfix(data);
 		}
 		/* Now start the updimming */
 		AS3676_MODIFY_REG(AS3676_REG_Pwm_control, 0x6, 0x2);
@@ -1882,6 +1996,32 @@ static ssize_t as3676_use_dls_show(struct device *dev,
 	return strnlen(buf, PAGE_SIZE);
 }
 
+static void as3676_use_dls(struct as3676_data *data, struct as3676_led *led,
+				bool use_dls)
+{
+	if (led->use_dls == use_dls)
+		return;
+	AS3676_MODIFY_REG(led->dls_mode_reg,
+			1 << led->dls_mode_shift,
+			use_dls << led->dls_mode_shift);
+	led->use_dls = use_dls;
+	if (use_dls) {
+		if (!data->dls_users) {
+			handle_ldo(data, LDO_FOR_DLS, true);
+			/*GPIO1 - Input/Nopull*/
+			AS3676_MODIFY_REG(AS3676_REG_GPIO_control, 0x0f, 0x00);
+		}
+		data->dls_users++;
+	} else {
+		data->dls_users--;
+		if (!data->dls_users) {
+			/*GPIO1 - Input/Pull-Down*/
+			AS3676_MODIFY_REG(AS3676_REG_GPIO_control, 0x0f, 0x04);
+			handle_ldo(data, LDO_FOR_DLS, false);
+		}
+	}
+}
+
 static ssize_t as3676_use_dls_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t size)
@@ -1893,11 +2033,8 @@ static ssize_t as3676_use_dls_store(struct device *dev,
 	i = sscanf(buf, "%3hhu", &use_dls);
 	if (i != 1)
 		return -EINVAL;
-	use_dls = !!use_dls;
 	AS3676_LOCK();
-	AS3676_MODIFY_REG(led->dls_mode_reg,
-			1 << led->dls_mode_shift,
-			use_dls << led->dls_mode_shift);
+	as3676_use_dls(data, led, !!use_dls);
 	AS3676_UNLOCK();
 	return strnlen(buf, PAGE_SIZE);
 }
@@ -1949,16 +2086,6 @@ static void as3676_switch_als(struct as3676_data *data, int als_on)
 	int i;
 	u8 adc_result;
 
-	if ((AS3676_READ_REG(AS3676_REG_ALS_control) & 1) == als_on)
-		return;
-
-	if (als_on)
-		data->ldo_count++;
-	else
-		data->ldo_count--;
-
-	/* Switch LDO on/off as required */
-	AS3676_MODIFY_REG(AS3676_REG_Control, 1, (data->ldo_count >= 1));
 	AS3676_MODIFY_REG(AS3676_REG_ALS_control, 1, als_on);
 	/* It is important to always start a ADC conversion to prevent AS3676
 	   from drawing too much power when switching off ALS. */
@@ -1982,10 +2109,58 @@ static ssize_t as3676_als_on_store(struct device *dev,
 		return -EINVAL;
 	if (als_on != 1 && als_on != 0)
 		return -EINVAL;
+
+	if ((AS3676_READ_REG(AS3676_REG_ALS_control) & 1) == als_on)
+		goto skip;
 	AS3676_LOCK();
+	handle_ldo(data, LDO_FOR_ALS, als_on);
 	as3676_switch_als(data, als_on);
 	AS3676_UNLOCK();
+skip:
 	return strnlen(buf, PAGE_SIZE);
+}
+
+static ssize_t as3676_adc_als_value_show(struct device *dev,
+
+				struct device_attribute *attr, char *buf)
+{
+	struct as3676_data *data = dev_get_drvdata(dev);
+	int i;
+	s32 als_result, amb_gain, offset;
+	u32 adc_result;
+
+	/* Start measuring GPIO2/LIGHT */
+	AS3676_LOCK();
+	AS3676_WRITE_REG(AS3676_REG_ADC_control, 0x80);
+	for (i = 0; i < 10; i++) {
+		adc_result = i2c_smbus_read_byte_data(data->client,
+				AS3676_REG_ADC_MSB_result);
+		if (!(adc_result & 0x80))
+			break;
+		udelay(10);
+	}
+	adc_result <<= 3;
+	adc_result |= i2c_smbus_read_byte_data(data->client,
+			AS3676_REG_ADC_LSB_result);
+
+	amb_gain = (AS3676_READ_REG(AS3676_REG_ALS_control) & 0x06) >> 1;
+	amb_gain = 1 << amb_gain; /* Have gain ready for calculations */
+	offset = AS3676_READ_REG(AS3676_REG_ALS_offset);
+	AS3676_UNLOCK();
+
+	/* multiply always before doing divisions to preserve precision.
+	   Overflows should not happen with the values */
+	als_result = (adc_result - 4 * offset) * amb_gain / 4;
+
+	snprintf(buf, PAGE_SIZE, "%u\n", adc_result);
+	return strnlen(buf, PAGE_SIZE);
+}
+
+static ssize_t as3676_adc_als_value_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	return -EINVAL;
 }
 
 static ssize_t as3676_als_result_show(struct device *dev,
@@ -2062,7 +2237,7 @@ static void as3676_dim_work(struct work_struct *work)
 		/* Turn off Pwm */
 		AS3676_MODIFY_REG(AS3676_REG_Pwm_control, 0x6, 0x0);
 		/* Possibly DCDC can be switched off now */
-		as3676_check_DCDC(data);
+		as3676_check_DCDC_postfix(data);
 	} else { /* up dimming */
 		for (i = 0; i < data->num_leds; i++) {
 			struct as3676_led *led = data->leds + i;
@@ -2246,14 +2421,7 @@ static ssize_t as3676_audio_on_store(struct device *dev,
 		goto exit;
 
 	AS3676_LOCK();
-	if (audio_on)
-		data->ldo_count++;
-	else
-		data->ldo_count--;
-
-	/* Switch LDO on/off as required */
-	AS3676_MODIFY_REG(AS3676_REG_Control, 1, (data->ldo_count >= 1));
-
+	handle_ldo(data, LDO_FOR_AUDIO, audio_on);
 	AS3676_MODIFY_REG(AS3676_REG_Audio_Control, 1, audio_on);
 	AS3676_UNLOCK();
 
@@ -2286,35 +2454,6 @@ static ssize_t as3676_audio_color_store(struct device *dev,
 	return strnlen(buf, PAGE_SIZE);
 }
 
-static ssize_t as3676_lx_res_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct as3676_data *data = dev_get_drvdata(dev);
-	static int als_raw_res;
-	s32 amb_result = i2c_smbus_read_byte_data(data->client,
-			AS3676_REG_ALS_result);
-
-	if (!(AS3676_READ_REG(AS3676_REG_ALS_control) & 1)) {
-		als_raw_res = 0;
-		snprintf(buf, PAGE_SIZE,
-				"%d\n", als_raw_res);
-		return strnlen(buf, PAGE_SIZE);
-	} else {
-		als_raw_res = (int)amb_result;
-
-		snprintf(buf, PAGE_SIZE,
-				"%d\n", als_raw_res);
-		return strnlen(buf, PAGE_SIZE);
-	}
-}
-
-static ssize_t as3676_lx_res_store(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf, size_t size)
-{
-	return -EINVAL;
-}
-
 static struct device_attribute as3676_attributes[] = {
 	AS3676_ATTR(debug),
 	AS3676_ATTR(dim_start),
@@ -2333,9 +2472,9 @@ static struct device_attribute as3676_attributes[] = {
 	AS3676_ATTR(als_offset),
 	AS3676_ATTR(als_gain),
 	AS3676_ATTR(als_on),
+	AS3676_ATTR(adc_als_value),
 	AS3676_ATTR(audio_on),
 	AS3676_ATTR(audio_color),
-	AS3676_ATTR(als_lx),
 	__ATTR_NULL
 };
 
@@ -2357,7 +2496,7 @@ static int as3676_configure(struct i2c_client *client,
 
 	INIT_DELAYED_WORK(&data->dim_work, as3676_dim_work);
 
-	AS3676_MODIFY_REG(AS3676_REG_DCDC_control1, 0x18,
+	AS3676_MODIFY_REG(AS3676_REG_DCDC_control1, 0xf8,
 			pdata->step_up_vtuning << 3);
 
 	AS3676_MODIFY_REG(AS3676_REG_Audio_Input, 0x7,
@@ -2370,17 +2509,29 @@ static int as3676_configure(struct i2c_client *client,
 			pdata->audio_speed_up << 1);
 	AS3676_MODIFY_REG(AS3676_REG_Audio_Control, 0xc0,
 			pdata->audio_speed_down << 6);
-	/* Set LDO to 2.8 volts: 20 * 0.05 + 1.8 = 2.8 Volts */
-	AS3676_WRITE_REG(AS3676_REG_LDO_Voltage, 20);
+	AS3676_WRITE_REG(AS3676_REG_LDO_Voltage, TO_LDO_VOLT_REG(
+		pdata->ldo_voltage ? pdata->ldo_voltage : LDO_VOLT_DEFALUT_MV));
 
 	/* Configure GPIO1 and GPIO2 for DLS / Light using minimal power
-	   GPIO1 : digital input, no pulls
+	   GPIO1 : digital input, Pull Down
 	   GPIO2 : analog input, no pulls */
-	AS3676_WRITE_REG(AS3676_REG_GPIO_control, 0xc0);
+	AS3676_WRITE_REG(AS3676_REG_GPIO_control, 0xc4);
 
 	AS3676_MODIFY_REG(AS3676_REG_Audio_Control_2, 0x30,
 			pdata->audio_source << 4);
 
+	data->caps_mounted_on_dcdc_feedback =
+		pdata->caps_mounted_on_dcdc_feedback;
+
+	/* Configure for auto feedback mode according to application note */
+	/* AN3676_DCDC_v1.0.pdf: set auto feedback */
+	AS3676_MODIFY_REG(AS3676_REG_DCDC_control2, 0x80, 0x80);
+	if (pdata->step_up_lowcur)
+		AS3676_MODIFY_REG(AS3676_REG_DCDC_control2, 0x08, 0x08);
+	/* Auto feedback needs one of the currents selected as feedback: */
+	AS3676_MODIFY_REG(AS3676_REG_DCDC_control1, 0x6, 0x2);
+	if (pdata->reset_on_i2c_shutdown)
+		AS3676_MODIFY_REG(AS3676_REG_Overtemp_control, 0x10, 0x10);
 	/* Remove curr33 since it is used as audio input */
 	if (pdata->audio_source == 0)
 		data->num_leds--;
@@ -2432,6 +2583,8 @@ static int as3676_configure(struct i2c_client *client,
 					led->name);
 			goto exit;
 		}
+		if (led->pled->use_dls)
+			as3676_use_dls(data, led, true);
 	}
 
 	err = device_add_attributes(&client->dev, as3676_attributes);
@@ -2439,7 +2592,7 @@ static int as3676_configure(struct i2c_client *client,
 	if (err)
 		goto exit;
 
-	for (i = 0; i < 6; i++) {
+	for (i = 0; i < ARRAY_SIZE(data->leds); i++) {
 		struct as3676_led *led = &data->leds[i];
 		if (led->pled->startup_current_uA) {
 			as3676_set_brightness(data, led,
@@ -2506,8 +2659,8 @@ static int as3676_probe(struct i2c_client *client,
 				id1, id2);
 		goto exit;
 	}
-	dev_info(&client->dev, "AS3676 driver v1.4: detected AS3676"
-			"compatible chip with ids %x %x\n",
+	dev_info(&client->dev, "AS3676 driver v1.7: detected AS3676"
+			" compatible chip with ids %x %x\n",
 			id1, id2);
 	/* all voltages on */
 	data->client = client;
@@ -2525,7 +2678,7 @@ static int as3676_probe(struct i2c_client *client,
 	}
 
 	AS3676_WRITE_REG(AS3676_REG_Control, 0x00);
-	AS3676_WRITE_REG(AS3676_REG_CP_control, 0x40); /* cp_auto_on */
+	AS3676_WRITE_REG(AS3676_REG_CP_control, as3676_pdata->cp_control);
 
 	i2c_set_clientdata(client, data);
 
@@ -2545,8 +2698,14 @@ static int as3676_remove(struct i2c_client *client)
 {
 	struct as3676_data *data = i2c_get_clientdata(client);
 	int i;
-	for (i = 0; i < AS3676_NUM_LEDS; i++)
-		led_classdev_unregister(&data->leds[i].ldev);
+
+	for (i = 0; i < AS3676_NUM_LEDS; i++) {
+		struct as3676_led *led = &data->leds[i];
+		device_remove_attributes(led->ldev.dev, as3676_led_attributes);
+		device_remove_file(led->ldev.dev, led->aud_file);
+		led_classdev_unregister(&led->ldev);
+	}
+	device_remove_attributes(&client->dev, as3676_attributes);
 
 	kfree(data);
 	i2c_set_clientdata(client, NULL);
@@ -2569,3 +2728,4 @@ MODULE_DESCRIPTION("AS3676 LED dimmer");
 
 module_init(as3676_init);
 module_exit(as3676_exit);
+
