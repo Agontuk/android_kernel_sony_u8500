@@ -68,6 +68,10 @@ extern int mali_l2_max_reads;
 module_param(mali_l2_max_reads, int, S_IRUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(mali_l2_max_reads, "Maximum reads for Mali L2 cache");
 
+extern int mali_oskmem_allocorder;
+module_param(mali_oskmem_allocorder, int, S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(mali_utilization_sampling_rate, "Mali OS kernel memory allocation order");
+
 #if MALI_TIMELINE_PROFILING_ENABLED
 extern int mali_boot_profiling;
 module_param(mali_boot_profiling, int, S_IRUSR | S_IRGRP | S_IROTH);
