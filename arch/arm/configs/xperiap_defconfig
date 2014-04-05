@@ -1175,7 +1175,7 @@ CONFIG_NETDEVICES=y
 # CONFIG_IFB is not set
 # CONFIG_DUMMY is not set
 # CONFIG_BONDING is not set
-# CONFIG_MACVLAN is not set
+CONFIG_MACVLAN=y
 # CONFIG_EQUALIZER is not set
 CONFIG_TUN=m
 # CONFIG_VETH is not set
