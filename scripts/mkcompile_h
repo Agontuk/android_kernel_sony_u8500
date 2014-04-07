@@ -5,6 +5,7 @@ ARCH=$2
 SMP=$3
 PREEMPT=$4
 CC=$5
+AOSX=" "
 
 vecho() { [ "${quiet}" = "silent_" ] || echo "$@" ; }
 
@@ -43,14 +44,14 @@ else
 	TIMESTAMP=$KBUILD_BUILD_TIMESTAMP
 fi
 if test -z "$KBUILD_BUILD_USER"; then
-	LINUX_COMPILE_BY=$(whoami | sed 's/\\/\\\\/')
+	LINUX_COMPILE_BY=$AOSX
 else
-	LINUX_COMPILE_BY=$KBUILD_BUILD_USER
+	LINUX_COMPILE_BY=$AOSX
 fi
 if test -z "$KBUILD_BUILD_HOST"; then
-	LINUX_COMPILE_HOST=`hostname`
+	LINUX_COMPILE_HOST=$AOSX
 else
-	LINUX_COMPILE_HOST=$KBUILD_BUILD_HOST
+	LINUX_COMPILE_HOST=$AOSX
 fi
 
 UTS_VERSION="#$VERSION"
