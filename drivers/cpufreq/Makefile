@@ -17,6 +17,7 @@ obj-$(CONFIG_CPU_FREQ_GOV_LULZACTIVEQ)	+= axperiau_lulzactiveq.o
 obj-$(CONFIG_CPU_FREQ_GOV_ONDEMANDAX)	+= axperiau_ondemandax.o
 obj-$(CONFIG_CPU_FREQ_GOV_PEGASUSQ)	+= axperiau_pegasusq.o
 obj-$(CONFIG_CPU_FREQ_GOV_WHEATLEY)  	+= cpufreq_wheatley.o
+obj-$(CONFIG_CPU_FREQ_GOV_ABYSSPLUG)    += cpufreq_abyssplug.o
 obj-$(CONFIG_CPU_FREQ_GOV_SAKURACTIVE)	+= cpufreq_sakuractive.o
 obj-$(CONFIG_CPU_FREQ_GOV_NIGHTMARE)	+= cpufreq_nightmare.o
 obj-$(CONFIG_CPU_FREQ_GOV_LIONHEART)   	+= cpufreq_lionheart.o
