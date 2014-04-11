@@ -179,6 +179,30 @@ config CPU_FREQ_DEFAULT_GOV_ABYSSPLUG
         help
 	  Use the CPUFreq governor 'abyssplug' as default.
 
+config CPU_FREQ_DEFAULT_GOV_PEGASUSQPLUS
+	bool "pegasusq plus"
+	select CPU_FREQ_GOV_PEGASUSQPLUS
+
+config CPU_FREQ_DEFAULT_GOV_INTERACTIVEPLUS
+	bool "interactiveplus"
+	select CPU_FREQ_GOV_INTERACTIVEPLUS
+	help
+	  Use the CPUFreq governor 'interactiveplus' as default. This allows
+	  you to get a full dynamic cpu frequency capable system by simply
+	  loading your cpufreq low-level hardware driver, using the
+	  'interactiveplus' governor for latency-sensitive workloads.
+
+	  The 'interactiveplus' governor also hotplugs on suspend.
+
+config CPU_FREQ_DEFAULT_GOV_ZZMOOVE
+	  bool "zzmoove"
+	  select CPU_FREQ_GOV_ZZMOOVE
+	  select CPU_FREQ_GOV_PERFORMANCE
+	  help
+	  Use the CPUFreq governor 'zzmoove' as default, using predefined
+	  frequency lookup tables and optimized scaling triggers instead of
+	  % frequency steps to get smooth up/downscaling dependant on CPU load.
+
 endchoice
          
 config CPU_FREQ_GOV_ABYSSPLUG
@@ -410,6 +434,56 @@ config CPU_FREQ_GOV_PEGASUSQ
 	  master/Xperia%20U%20Modules/Pagasusq%20governor/axperiau_pegasusq.c
 
 	  If in doubt, say N.
+
+config CPU_FREQ_GOV_PEGASUSQPLUS
+	tristate "'pegasusq plus' cpufreq policy governor"
+
+config CPU_FREQ_GOV_FANTASY
+	tristate "'fantasy' cpufreq policy governor"
+	select CPU_FREQ_TABLE
+	help
+	  'fantasy' - This driver adds a dynamic cpufreq policy governor.
+	  The governor does a periodic polling and
+	  changes frequency based on the CPU utilization.
+	  The support for this governor depends on CPU capability to
+	  do fast frequency switching (i.e, very low latency frequency
+	  transitions).
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called cpufreq_fantasy.
+
+	  For details, take a look at linux/Documentation/cpu-freq.
+
+	  If in doubt, say N.
+
+config CPU_FREQ_GOV_INTERACTIVEPLUS
+	tristate "'interactiveplus' cpufreq policy governor"
+	help
+	  'interactiveplus' - This driver adds a dynamic cpufreq policy governor
+	  designed for latency-sensitive workloads.
+
+	  This governor attempts to reduce the latency of clock
+	  increases so that the system is more responsive to
+	  interactive workloads.
+
+	  The 'interactiveplus' governor also hotplugs CPU1 on suspend.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called cpufreq_interactiveplus.
+
+	  For details, take a look at linux/Documentation/cpu-freq.
+
+	  If in doubt, say N.
+
+config CPU_FREQ_GOV_ZZMOOVE
+       tristate "'zzmoove' cpufreq governor"
+       depends on CPU_FREQ
+       help
+         'zzmoove' - based on cpufreq_conservative, using predefined
+         frequency lookup tables and optimized scaling triggers instead of
+         % frequency steps to get smooth up/downscaling dependant on CPU load.
+
+         If in doubt, say N.
 
 menu "x86 CPU frequency scaling drivers"
 depends on X86
