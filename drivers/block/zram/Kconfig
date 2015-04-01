@@ -27,6 +27,17 @@ config ZRAM_LZ4_COMPRESS
 	  This option enables LZ4 compression algorithm support. Compression
 	  algorithm can be changed using `comp_algorithm' device attribute.
 
+config ZRAM_SNAPPY_COMPRESS
+	bool "Enable snappy algorithm support"
+	depends on ZRAM
+	depends on STAGING
+	select SNAPPY_COMPRESS
+	select SNAPPY_DECOMPRESS
+	default n
+	help
+	  This option enables snappy compression algorithm support. Compression
+	  algorithm can be changed using `comp_algorithm' device attribute.
+
 config ZRAM_DEBUG
 	bool "Compressed RAM block device debug support"
 	depends on ZRAM
