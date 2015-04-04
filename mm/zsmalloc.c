@@ -93,7 +93,6 @@
 #include <linux/types.h>
 #include <linux/debugfs.h>
 #include <linux/zsmalloc.h>
-#include <linux/zpool.h>
 
 /*
  * This must be power of 2 and greater than of equal to sizeof(link_free).
@@ -268,83 +267,6 @@ struct mapping_area {
 	char *vm_addr; /* address of kmap_atomic()'ed pages */
 	enum zs_mapmode vm_mm; /* mapping mode */
 };
-
-/* zpool driver */
-
-#ifdef CONFIG_ZPOOL
-
-static void *zs_zpool_create(char *name, gfp_t gfp, struct zpool_ops *zpool_ops)
-{
-	return zs_create_pool(name, gfp);
-}
-
-static void zs_zpool_destroy(void *pool)
-{
-	zs_destroy_pool(pool);
-}
-
-static int zs_zpool_malloc(void *pool, size_t size, gfp_t gfp,
-			unsigned long *handle)
-{
-	*handle = zs_malloc(pool, size);
-	return *handle ? 0 : -1;
-}
-static void zs_zpool_free(void *pool, unsigned long handle)
-{
-	zs_free(pool, handle);
-}
-
-static int zs_zpool_shrink(void *pool, unsigned int pages,
-			unsigned int *reclaimed)
-{
-	return -EINVAL;
-}
-
-static void *zs_zpool_map(void *pool, unsigned long handle,
-			enum zpool_mapmode mm)
-{
-	enum zs_mapmode zs_mm;
-
-	switch (mm) {
-	case ZPOOL_MM_RO:
-		zs_mm = ZS_MM_RO;
-		break;
-	case ZPOOL_MM_WO:
-		zs_mm = ZS_MM_WO;
-		break;
-	case ZPOOL_MM_RW: /* fallthru */
-	default:
-		zs_mm = ZS_MM_RW;
-		break;
-	}
-
-	return zs_map_object(pool, handle, zs_mm);
-}
-static void zs_zpool_unmap(void *pool, unsigned long handle)
-{
-	zs_unmap_object(pool, handle);
-}
-
-static u64 zs_zpool_total_size(void *pool)
-{
-	return zs_get_total_pages(pool) << PAGE_SHIFT;
-}
-
-static struct zpool_driver zs_zpool_driver = {
-	.type =		"zsmalloc",
-	.owner =	THIS_MODULE,
-	.create =	zs_zpool_create,
-	.destroy =	zs_zpool_destroy,
-	.malloc =	zs_zpool_malloc,
-	.free =		zs_zpool_free,
-	.shrink =	zs_zpool_shrink,
-	.map =		zs_zpool_map,
-	.unmap =	zs_zpool_unmap,
-	.total_size =	zs_zpool_total_size,
-};
-
-MODULE_ALIAS("zpool-zsmalloc");
-#endif /* CONFIG_ZPOOL */
 
 /* per-cpu VM mapping areas for zspage accesses that cross page boundaries */
 static DEFINE_PER_CPU(struct mapping_area, zs_map_area);
@@ -620,7 +542,7 @@ static void reset_page(struct page *page)
 	set_page_private(page, 0);
 	page->mapping = NULL;
 	page->freelist = NULL;
-	page_mapcount_reset(page);
+	reset_page_mapcount(page);
 }
 
 static void free_zspage(struct page *first_page)
@@ -776,7 +698,7 @@ static inline int __zs_cpu_up(struct mapping_area *area)
 	 */
 	if (area->vm)
 		return 0;
-	area->vm = alloc_vm_area(PAGE_SIZE * 2, NULL);
+	area->vm = alloc_vm_area(PAGE_SIZE * 2);
 	if (!area->vm)
 		return -ENOMEM;
 	return 0;
@@ -792,7 +714,7 @@ static inline void __zs_cpu_down(struct mapping_area *area)
 static inline void *__zs_map_object(struct mapping_area *area,
 				struct page *pages[2], int off, int size)
 {
-	BUG_ON(map_vm_area(area->vm, PAGE_KERNEL, pages));
+	BUG_ON(map_vm_area(area->vm, PAGE_KERNEL, &pages));
 	area->vm_addr = area->vm->addr;
 	return area->vm_addr + off;
 }
@@ -915,16 +837,13 @@ static int zs_register_cpu_notifier(void)
 {
 	int cpu, uninitialized_var(ret);
 
-	cpu_notifier_register_begin();
-
-	__register_cpu_notifier(&zs_cpu_nb);
+	register_cpu_notifier(&zs_cpu_nb);
 	for_each_online_cpu(cpu) {
 		ret = zs_cpu_notifier(NULL, CPU_UP_PREPARE, (void *)(long)cpu);
 		if (notifier_to_errno(ret))
 			break;
 	}
 
-	cpu_notifier_register_done();
 	return notifier_to_errno(ret);
 }
 
@@ -932,13 +851,9 @@ static void zs_unregister_cpu_notifier(void)
 {
 	int cpu;
 
-	cpu_notifier_register_begin();
-
 	for_each_online_cpu(cpu)
 		zs_cpu_notifier(NULL, CPU_DEAD, (void *)(long)cpu);
-	__unregister_cpu_notifier(&zs_cpu_nb);
-
-	cpu_notifier_register_done();
+	unregister_cpu_notifier(&zs_cpu_nb);
 }
 
 static void init_zs_size_classes(void)
@@ -1465,21 +1380,12 @@ static int __init zs_init(void)
 
 	init_zs_size_classes();
 
-#ifdef CONFIG_ZPOOL
-	zpool_register_driver(&zs_zpool_driver);
-#endif
-
 	ret = zs_stat_init();
 	if (ret) {
 		pr_err("zs stat initialization failed\n");
-		goto stat_fail;
 	}
 	return 0;
 
-stat_fail:
-#ifdef CONFIG_ZPOOL
-	zpool_unregister_driver(&zs_zpool_driver);
-#endif
 notifier_fail:
 	zs_unregister_cpu_notifier();
 
@@ -1488,9 +1394,6 @@ notifier_fail:
 
 static void __exit zs_exit(void)
 {
-#ifdef CONFIG_ZPOOL
-	zpool_unregister_driver(&zs_zpool_driver);
-#endif
 	zs_unregister_cpu_notifier();
 
 	zs_stat_exit();
