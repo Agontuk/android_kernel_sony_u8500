@@ -15,7 +15,9 @@
 #include <linux/sched.h>
 
 #include "zcomp.h"
+#ifdef CONFIG_ZRAM_LZO_COMPRESS
 #include "zcomp_lzo.h"
+#endif
 #ifdef CONFIG_ZRAM_LZ4_COMPRESS
 #include "zcomp_lz4.h"
 #endif
@@ -47,7 +49,9 @@ struct zcomp_strm_multi {
 };
 
 static struct zcomp_backend *backends[] = {
+#ifdef CONFIG_ZRAM_LZO_COMPRESS
 	&zcomp_lzo,
+#endif
 #ifdef CONFIG_ZRAM_LZ4_COMPRESS
 	&zcomp_lz4,
 #endif
