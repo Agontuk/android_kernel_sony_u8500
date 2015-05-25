@@ -2444,7 +2444,7 @@ struct sk_buff *ieee80211_qosnullfunc_get(struct ieee80211_hw *hw,
 	}
 	skb_reserve(skb, local->hw.extra_tx_headroom);
 
-	nullfunc = (struct ieee80211_hdr_3addr *) skb_put(skb,
+	nullfunc = (struct ieee80211_qos_hdr *) skb_put(skb,
 							  sizeof(*nullfunc));
 	memset(nullfunc, 0, sizeof(*nullfunc));
 	nullfunc->frame_control = cpu_to_le16(IEEE80211_FTYPE_DATA |
