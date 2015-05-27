@@ -1,0 +1,77 @@
+config ZRAM
+	tristate "Compressed RAM block device support"
+	depends on BLOCK && SYSFS
+	select ZSMALLOC
+	select PGTABLE_MAPPING
+	default n
+	help
+	  Creates virtual block devices called /dev/zramX (X = 0, 1, ...).
+	  Pages written to these disks are compressed and stored in memory
+	  itself. These disks allow very fast I/O and compression provides
+	  good amounts of memory savings.
+
+	  It has several use cases, for example: /tmp storage, use as swap
+	  disks and maybe many more.
+
+	  See zram.txt for more information.
+
+choice
+	prompt "Default ZRAM compression mode"
+	depends on ZRAM
+	default ZRAM_DEFAULT_COMPRESS_LZO
+	help
+	  This option sets which zram compression algorithm shall be used by
+	  default. If in doubt, select 'LZO'.
+
+config ZRAM_DEFAULT_COMPRESS_LZO
+	bool "LZO"
+	select ZRAM_LZO_COMPRESS
+
+config ZRAM_DEFAULT_COMPRESS_LZ4
+	bool "LZ4"
+	select ZRAM_LZ4_COMPRESS
+
+config ZRAM_DEFAULT_COMPRESS_SNAPPY
+	bool "snappy"
+	depends on STAGING
+	select ZRAM_SNAPPY_COMPRESS
+endchoice
+
+config ZRAM_LZO_COMPRESS
+	bool "Enable LZO algorithm support"
+	depends on ZRAM
+	select LZO_COMPRESS
+	select LZO_DECOMPRESS
+	default y
+	help
+	  This option enables LZO compression algorithm support. Compression
+	  algorithm can be changed using `comp_algorithm' device attribute.
+
+config ZRAM_LZ4_COMPRESS
+	bool "Enable LZ4 algorithm support"
+	depends on ZRAM
+	select LZ4_COMPRESS
+	select LZ4_DECOMPRESS
+	default n
+	help
+	  This option enables LZ4 compression algorithm support. Compression
+	  algorithm can be changed using `comp_algorithm' device attribute.
+
+config ZRAM_SNAPPY_COMPRESS
+	bool "Enable snappy algorithm support"
+	depends on ZRAM
+	depends on STAGING
+	select SNAPPY_COMPRESS
+	select SNAPPY_DECOMPRESS
+	default n
+	help
+	  This option enables snappy compression algorithm support. Compression
+	  algorithm can be changed using `comp_algorithm' device attribute.
+
+config ZRAM_DEBUG
+	bool "Compressed RAM block device debug support"
+	depends on ZRAM
+	default n
+	help
+	  This option adds additional debugging code to the compressed
+	  RAM block device driver.
