@@ -37,7 +37,6 @@
 #include <linux/netfilter.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter/xt_IDLETIMER.h>
-#include <linux/netlink.h>
 #include <linux/kdev_t.h>
 #include <linux/kobject.h>
 #include <linux/skbuff.h>
@@ -49,8 +48,6 @@
 #include <linux/suspend.h>
 #include <linux/notifier.h>
 #include <net/net_namespace.h>
-
-static struct sock *nl_sk;
 
 struct idletimer_tg_attr {
 	struct attribute attr;
@@ -83,46 +80,6 @@ static DEFINE_MUTEX(list_mutex);
 static DEFINE_SPINLOCK(timestamp_lock);
 
 static struct kobject *idletimer_tg_kobj;
-
-static void notify_netlink(const char *iface, struct idletimer_tg *timer)
-{
-	struct sk_buff *log_skb;
-	size_t size;
-	struct nlmsghdr *nlh;
-	char str[NLMSG_MAX_SIZE];
-	int event_type, res;
-
-	size = NLMSG_SPACE(NLMSG_MAX_SIZE);
-	size = max(size, (size_t)NLMSG_GOODSIZE);
-	log_skb = alloc_skb(size, GFP_ATOMIC);
-	if (!log_skb) {
-		pr_err("xt_cannot alloc skb for logging\n");
-		return;
-	}
-
-	event_type = timer->active ? NL_EVENT_TYPE_ACTIVE
-				: NL_EVENT_TYPE_INACTIVE;
-	res = snprintf(str, NLMSG_MAX_SIZE, "%s %s\n", iface,
-		timer->active ? "ACTIVE" : "INACTIVE");
-	if (NLMSG_MAX_SIZE <= res)
-		goto nlmsg_failure;
-
-	/* NLMSG_PUT() uses "goto nlmsg_failure" */
-	nlh = NLMSG_PUT(log_skb, /*pid*/0, /*seq*/0, event_type,
-			/* Size of message */NLMSG_MAX_SIZE);
-
-	strncpy(NLMSG_DATA(nlh), str, MAX_IDLETIMER_LABEL_SIZE);
-
-	NETLINK_CB(log_skb).dst_group = 1;
-	netlink_broadcast(nl_sk, log_skb, 0, 1, GFP_ATOMIC);
-
-	pr_debug("putting nlmsg: %s", str);
-	return;
-
-nlmsg_failure:  /* Used within NLMSG_PUT() */
-	consume_skb(log_skb);
-	pr_debug("Failed nlmsg_put\n");
-}
 
 static bool check_for_delayed_trigger(struct idletimer_tg *timer,
 		struct timespec *ts)
@@ -193,6 +150,8 @@ static void notify_netlink_uevent(const char *iface, struct idletimer_tg *timer)
 	pr_debug("putting nlmsg: <%s> <%s>\n", iface_msg, state_msg);
 	kobject_uevent_env(idletimer_tg_kobj, KOBJ_CHANGE, envp);
 	return;
+
+
 }
 
 static
@@ -309,14 +268,12 @@ static int idletimer_tg_create(struct idletimer_tg_info *info)
 
 	info->timer = kmalloc(sizeof(*info->timer), GFP_KERNEL);
 	if (!info->timer) {
-		pr_debug("couldn't alloc timer\n");
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	info->timer->attr.attr.name = kstrdup(info->label, GFP_KERNEL);
 	if (!info->timer->attr.attr.name) {
-		pr_debug("couldn't alloc attribute name\n");
 		ret = -ENOMEM;
 		goto out_free_timer;
 	}
@@ -443,7 +400,6 @@ static int idletimer_tg_checkentry(const struct xt_tgchk_param *par)
 	info->timer = __idletimer_tg_find_by_label(info->label);
 	if (info->timer) {
 		info->timer->refcnt++;
-
 		reset_timer(info);
 		pr_debug("increased refcnt of timer %s to %u\n",
 			 info->label, info->timer->refcnt);
@@ -526,15 +482,6 @@ static int __init idletimer_tg_init(void)
 	if (err < 0) {
 		pr_debug("couldn't register xt target\n");
 		goto out_dev;
-	}
-
-	nl_sk = netlink_kernel_create(&init_net,
-				      NETLINK_IDLETIMER, 1, NULL,
-				      NULL, THIS_MODULE);
-
-	if (!nl_sk) {
-		pr_err("Failed to create netlink socket\n");
-		return -ENOMEM;
 	}
 
 	return 0;
